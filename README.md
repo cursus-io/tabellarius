@@ -28,3 +28,18 @@ Change Data Capture Source
    ```
 
 4. Start the Server: `docker compose up cdc-server`
+
+## Docker Images
+
+Docker images are published to GitHub Container Registry:
+
+```bash
+docker pull ghcr.io/cursus-io/tabellarius:latest
+docker run --rm ghcr.io/cursus-io/tabellarius:latest cdc-server --help
+```
+
+Versioned release images are available with release tags:
+
+```bash
+docker pull ghcr.io/cursus-io/tabellarius:<version>
+```
