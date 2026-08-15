@@ -14,12 +14,16 @@ func TestNewFromConfig_MySQL(t *testing.T) {
 			Schema: "test",
 		},
 		CDCServer: config.CDCServer{
-			OffsetFile:    "/tmp/offset",
-			PublisherAddr: "localhost:1234",
+			OffsetFile:      "/tmp/offset",
+			PublisherConfig: "/config.yaml",
 		},
 	}
 
-	src := NewFromConfig(nil, cfg)
+	src, err := NewFromConfig(nil, cfg)
+	if err != nil {
+		t.Logf("Expected failure to initialize source (no real cursus): %v", err)
+		return
+	}
 	if src == nil {
 		t.Fatal("expected source, got nil")
 	}

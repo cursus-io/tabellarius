@@ -1,0 +1,15 @@
+broker_addrs:
+  - "broker:9000"
+topic: "tabellarius.cdc"
+auto_create_topics: true
+partitions: 1
+enable_idempotence: true
+acks: "1"
+max_retries: 5
+retry_backoff_ms: 200
+ack_timeout_ms: 5000
+write_timeout_ms: 5000
+flush_timeout_ms: 10000
+max_inflight_requests: 5
+batch_size: 1
+buffer_size: 1024

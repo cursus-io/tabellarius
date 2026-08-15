@@ -26,6 +26,13 @@ func (s *TabellariusSource) Start(ctx context.Context) {
 	go s.run(ctx, ch)
 }
 
+func (s *TabellariusSource) Close() error {
+	if s.pub != nil {
+		return s.pub.Close()
+	}
+	return nil
+}
+
 func (s *TabellariusSource) run(ctx context.Context, in <-chan model.Event) {
 	txBuffer := map[string][]model.RowChange{}
 	var lastOffset model.Offset
