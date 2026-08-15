@@ -1,0 +1,20 @@
+name: Cursus E2E
+
+on:
+  pull_request:
+    branches: [main, release-*]
+  push:
+    branches: [main, release-*]
+
+jobs:
+  cursus-restart-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.0'
+          cache: true
+      - name: Run Cursus restart recovery E2E
+        run: RUN_CURSUS_E2E=1 go test -v -tags e2e ./test -run TestCursusRestartRecoveryE2E -count=1
