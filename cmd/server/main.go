@@ -49,13 +49,20 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	src := source.NewFromConfig(db, cfg)
+	src, err := source.NewFromConfig(db, cfg)
+	if err != nil {
+		log.Fatalf("[FATAL] failed to initialize source: %v", err)
+	}
 	src.Start(ctx)
 
 	sig := <-sigChan
 	log.Printf("[INFO] received signal (%s). starting graceful shutdown...", sig)
 
 	cancel()
+
+	if err := src.Close(); err != nil {
+		log.Printf("[WARN] error closing source: %v", err)
+	}
 
 	time.Sleep(2 * time.Second)
 	log.Println("[OK] tabellarius stopped safely.")

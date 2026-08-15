@@ -28,7 +28,7 @@ tables:
 
 cdc_server:
   offset_file: offset.txt
-  publisher_addr: localhost:9092
+  publisher_config: /config.yaml
 `
 
 	tmp, err := os.CreateTemp("", "config-*.yaml")

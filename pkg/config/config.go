@@ -23,8 +23,8 @@ type Table struct {
 }
 
 type CDCServer struct {
-	OffsetFile    string `yaml:"offset_file"`
-	PublisherAddr string `yaml:"publisher_addr"`
+	OffsetFile      string `yaml:"offset_file"`
+	PublisherConfig string `yaml:"publisher_config"`
 }
 
 type Config struct {

@@ -1,6 +1,21 @@
 version: "3.9"
 
 services:
+  broker:
+    image: ghcr.io/cursus-io/cursus:latest
+    container_name: tabellarius-cursus
+    command: ["./broker"]
+    environment:
+      ADVERTISED_CLIENT_HOST: broker
+    ports:
+      - "9000:9000"
+      - "9080:9080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9080/ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
   mysql:
     image: mysql:8.0
     container_name: cdc-mysql
@@ -36,7 +51,9 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+      broker:
+        condition: service_healthy
     volumes:
       - ./cdc-config.yaml:/app/cdc-config.yaml
-      - ./cursus-config.yaml:/cursus-config.yaml
+      - ./cursus-config.integration.yaml:/config.yaml:ro
     entrypoint: ["cdc-server"]
