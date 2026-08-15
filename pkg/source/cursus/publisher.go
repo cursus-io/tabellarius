@@ -4,12 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 	"time"
 
 	"github.com/cursus-io/cursus/sdk"
 	"github.com/cursus-io/tabellarius/pkg/model"
-	"gopkg.in/yaml.v3"
 )
 
 type Publisher struct {
@@ -37,14 +35,9 @@ func NewCursusPublisher(configPath string) (*Publisher, error) {
 		configPath = "/config.yaml"
 	}
 
-	data, err := os.ReadFile(configPath)
+	cfg, err := loadPublisherConfig(configPath)
 	if err != nil {
-		return nil, fmt.Errorf("read publisher config %s: %w", configPath, err)
-	}
-
-	cfg := sdk.NewDefaultPublisherConfig()
-	if err := yaml.Unmarshal(data, cfg); err != nil {
-		return nil, fmt.Errorf("parse publisher config %s: %w", configPath, err)
+		return nil, err
 	}
 
 	pub, err := sdk.NewProducer(cfg)
