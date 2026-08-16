@@ -236,13 +236,8 @@ func (b *BinlogInspector) emitRowEvents(out chan<- model.Event, h *replication.E
 	eventTime := time.Unix(int64(h.Timestamp), 0)
 	meta, ok := b.tableMeta[table]
 	if !ok {
-		log.Printf("[binlog] warning: tableMeta missing for %s, generating default columns", table)
-
-		meta = &tableMeta{
-			pkName:  "",
-			pkIndex: 0,
-			columns: make([]string, len(e.Rows[0])),
-		}
+		log.Printf("[binlog] debug: skip row event for unconfigured table %s", table)
+		return
 	}
 
 	offset := model.MySQLOffset{
