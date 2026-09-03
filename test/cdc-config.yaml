@@ -16,5 +16,6 @@ tables:
     pk: id
 
 cdc_server:
+  server_id: 9106002
   offset_file: offset.txt
   publisher_config: /config.yaml
