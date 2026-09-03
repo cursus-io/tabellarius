@@ -16,6 +16,7 @@ type fakePublisher struct {
 	message string
 	err     error
 	closed  bool
+	flushed bool
 }
 
 func TestPublisherLogDoesNotRenderRowValues(t *testing.T) {
@@ -48,6 +49,10 @@ func (p *fakePublisher) Send(message string) (uint64, error) {
 	return 1, p.err
 }
 
+func (p *fakePublisher) Flush() {
+	p.flushed = true
+}
+
 func (p *fakePublisher) Close() error {
 	p.closed = true
 	return nil
@@ -78,6 +83,9 @@ func TestPublisherPublishesSerializableTransaction(t *testing.T) {
 	if len(payload.Changes) != 1 || payload.Changes[0].Table != "orders" {
 		t.Fatalf("changes were not preserved: %+v", payload.Changes)
 	}
+	if !fake.flushed {
+		t.Fatal("publisher was not flushed after send")
+	}
 
 	if err := publisher.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -89,10 +97,14 @@ func TestPublisherPublishesSerializableTransaction(t *testing.T) {
 
 func TestPublisherReturnsClientError(t *testing.T) {
 	want := errors.New("broker unavailable")
-	publisher := &Publisher{pub: &fakePublisher{err: want}}
+	fake := &fakePublisher{err: want}
+	publisher := &Publisher{pub: fake}
 	event := model.NewTransactionBoundaryEvent(model.SourceMySQLBinlog, model.MySQLOffset{}, time.Now(), "tx-1", model.TxCommit)
 
 	if err := publisher.Publish(event); !errors.Is(err, want) {
 		t.Fatalf("Publish() error = %v, want wrapped %v", err, want)
+	}
+	if fake.flushed {
+		t.Fatal("publisher was flushed after Send returned an error")
 	}
 }

@@ -16,6 +16,7 @@ type Publisher struct {
 
 type publisherClient interface {
 	Send(message string) (uint64, error)
+	Flush()
 	Close() error
 }
 
@@ -62,8 +63,6 @@ func (p *Publisher) Publish(evt model.Event) error {
 		return fmt.Errorf("broker publisher not initialized")
 	}
 
-	p.logEvent(evt)
-
 	eventJSON, err := marshalEvent(evt)
 	if err != nil {
 		return fmt.Errorf("failed to marshal event: %w", err)
@@ -73,6 +72,9 @@ func (p *Publisher) Publish(evt model.Event) error {
 	if err != nil {
 		return fmt.Errorf("failed to publish message to cursus: %w", err)
 	}
+	p.pub.Flush()
+
+	p.logEvent(evt)
 
 	return nil
 }
