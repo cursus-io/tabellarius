@@ -77,6 +77,9 @@ func waitForServiceLog(t *testing.T, service string, since time.Time, expected s
 		if strings.Contains(logs, "[binlog] stream failed:") {
 			t.Fatalf("%s failed to start its binlog stream: %s", service, safeCDCStartupDiagnostics(logs))
 		}
+		if strings.Contains(logs, "[FATAL]") {
+			t.Fatalf("%s failed before starting its binlog stream: %s", service, safeCDCStartupDiagnostics(logs))
+		}
 		time.Sleep(2 * time.Second)
 	}
 
