@@ -99,20 +99,29 @@ func waitForContainer(t *testing.T, name, expectedStatus string) {
 func assertTopicHasRecords(t *testing.T) {
 	t.Helper()
 
-	cfg := sdk.NewDefaultConsumerConfig()
-	cfg.BrokerAddrs = []string{"127.0.0.1:9000"}
-	client, err := sdk.NewConsumerClient(cfg)
-	if err != nil {
-		t.Fatalf("NewConsumerClient() error = %v", err)
+	deadline := time.Now().Add(60 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		cfg := sdk.NewDefaultConsumerConfig()
+		cfg.BrokerAddrs = []string{"127.0.0.1:9000"}
+		client, err := sdk.NewConsumerClient(cfg)
+		if err == nil {
+			offsets, err := client.ListOffsets(topicName, 0)
+			if err == nil && len(offsets) == 1 && offsets[0].LEO > 0 {
+				return
+			}
+			if err == nil {
+				lastErr = fmt.Errorf("topic has no persisted records: %+v", offsets)
+			} else {
+				lastErr = err
+			}
+		} else {
+			lastErr = err
+		}
+		time.Sleep(2 * time.Second)
 	}
 
-	offsets, err := client.ListOffsets(topicName, 0)
-	if err != nil {
-		t.Fatalf("ListOffsets() error = %v", err)
-	}
-	if len(offsets) != 1 || offsets[0].LEO == 0 {
-		t.Fatalf("topic has no persisted records: %+v", offsets)
-	}
+	t.Fatalf("topic records did not become queryable after restart: %v", lastErr)
 }
 
 func runCompose(t *testing.T, args ...string) {
