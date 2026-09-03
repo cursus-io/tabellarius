@@ -43,7 +43,7 @@ func TestPublisherLogDoesNotRenderRowValues(t *testing.T) {
 	}
 }
 
-func (p *fakePublisher) PublishMessage(message string) (uint64, error) {
+func (p *fakePublisher) Send(message string) (uint64, error) {
 	p.message = message
 	return 1, p.err
 }

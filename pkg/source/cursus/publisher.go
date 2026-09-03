@@ -15,7 +15,7 @@ type Publisher struct {
 }
 
 type publisherClient interface {
-	PublishMessage(message string) (uint64, error)
+	Send(message string) (uint64, error)
 	Close() error
 }
 
@@ -69,7 +69,7 @@ func (p *Publisher) Publish(evt model.Event) error {
 		return fmt.Errorf("failed to marshal event: %w", err)
 	}
 
-	_, err = p.pub.PublishMessage(string(eventJSON))
+	_, err = p.pub.Send(string(eventJSON))
 	if err != nil {
 		return fmt.Errorf("failed to publish message to cursus: %w", err)
 	}
