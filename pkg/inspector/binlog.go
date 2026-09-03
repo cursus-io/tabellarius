@@ -2,6 +2,7 @@ package inspector
 
 import (
 	"context"
+	"crypto/tls"
 	"database/sql"
 	"fmt"
 	"log"
@@ -52,9 +53,19 @@ func NewBinlogInspector(db *sql.DB, dbType model.DatabaseType, schema, dsn, offs
 
 	for _, t := range tables {
 		key := fmt.Sprintf("%s.%s", schema, t.Name)
+		includeColumns := make(map[string]struct{}, len(t.IncludeColumns))
+		for _, column := range t.IncludeColumns {
+			includeColumns[column] = struct{}{}
+		}
+		excludeColumns := make(map[string]struct{}, len(t.ExcludeColumns))
+		for _, column := range t.ExcludeColumns {
+			excludeColumns[column] = struct{}{}
+		}
 		b.tableMeta[key] = &tableMeta{
-			pkName:  t.PK,
-			pkIndex: -1,
+			pkName:         t.PK,
+			pkIndex:        -1,
+			includeColumns: includeColumns,
+			excludeColumns: excludeColumns,
 		}
 	}
 
@@ -81,6 +92,7 @@ func (b *BinlogInspector) Start(ctx context.Context, out chan<- model.Event) err
 		Password:   b.password,
 		UseDecimal: true,
 		ParseTime:  true,
+		TLSConfig:  requiredTLSConfig(),
 	}
 
 	syncer := replication.NewBinlogSyncer(cfg)
@@ -187,6 +199,13 @@ func (b *BinlogInspector) Start(ctx context.Context, out chan<- model.Event) err
 	}
 }
 
+func requiredTLSConfig() *tls.Config {
+	return &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: true, //nolint:gosec // MySQL REQUIRED mode has no managed CA bundle.
+	}
+}
+
 func (b *BinlogInspector) onTableMap(e *replication.TableMapEvent) {
 	if isSystemSchema(e.Schema) {
 		return
@@ -272,17 +291,17 @@ func (b *BinlogInspector) emitRowEvents(out chan<- model.Event, h *replication.E
 			after := e.Rows[i+1]
 			rowsData = append(rowsData, model.RowData{
 				PK:     extractPK(meta, before),
-				Before: rowToMap(meta.columns, before),
-				After:  rowToMap(meta.columns, after),
+				Before: rowToMap(meta.columns, before, meta.includeColumns, meta.excludeColumns),
+				After:  rowToMap(meta.columns, after, meta.includeColumns, meta.excludeColumns),
 			})
 		}
 	} else {
 		for _, row := range e.Rows {
 			data := model.RowData{PK: extractPK(meta, row)}
 			if op == model.OpInsert {
-				data.After = rowToMap(meta.columns, row)
+				data.After = rowToMap(meta.columns, row, meta.includeColumns, meta.excludeColumns)
 			} else {
-				data.Before = rowToMap(meta.columns, row)
+				data.Before = rowToMap(meta.columns, row, meta.includeColumns, meta.excludeColumns)
 			}
 			rowsData = append(rowsData, data)
 		}

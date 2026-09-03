@@ -1,8 +1,11 @@
 package cursus
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"log"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +16,31 @@ type fakePublisher struct {
 	message string
 	err     error
 	closed  bool
+}
+
+func TestPublisherLogDoesNotRenderRowValues(t *testing.T) {
+	var output bytes.Buffer
+	writer, flags := log.Writer(), log.Flags()
+	log.SetOutput(&output)
+	log.SetFlags(0)
+	defer func() {
+		log.SetOutput(writer)
+		log.SetFlags(flags)
+	}()
+
+	publisher := &Publisher{}
+	publisher.logEvent(model.NewTransactionEvent(
+		model.SourceMySQLBinlog,
+		model.MySQLOffset{File: "mysql-bin.000001", Pos: 42},
+		time.Now(),
+		"tx-1",
+		[]model.RowChange{{Schema: "commerce", Table: "members", Op: model.OpUpdate, Rows: []model.RowData{{Before: map[string]any{"password_hash": "secret-before"}, After: map[string]any{"password_hash": "secret-after"}}}}},
+	))
+
+	got := output.String()
+	if strings.Contains(got, "secret-before") || strings.Contains(got, "secret-after") || strings.Contains(got, "password_hash") {
+		t.Fatalf("row values leaked to log: %s", got)
+	}
 }
 
 func (p *fakePublisher) PublishMessage(message string) (uint64, error) {

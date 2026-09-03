@@ -89,20 +89,11 @@ func (p *Publisher) logEvent(evt model.Event) {
 		log.Printf("%s [ddl] txID=%s query=%s", prefix, e.TxID(), e.Query())
 
 	case model.RowChangeEvent:
-		for ci, change := range e.Changes() {
-			for ri, row := range change.Rows {
-				if change.Op == model.OpUpdate && row.Before != nil && row.After != nil {
-					beforeJSON, _ := json.Marshal(row.Before)
-					afterJSON, _ := json.Marshal(row.After)
-					log.Printf("%s [row][%d:%d] table=%s.%s txID=%s op=UPDATE before=%s after=%s",
-						prefix, ci, ri, change.Schema, change.Table, e.TxID(),
-						string(beforeJSON), string(afterJSON))
-				} else {
-					log.Printf("%s [row][%d:%d] table=%s.%s txID=%s op=%s",
-						prefix, ci, ri, change.Schema, change.Table, e.TxID(), change.Op)
-				}
-			}
+		rows := 0
+		for _, change := range e.Changes() {
+			rows += len(change.Rows)
 		}
+		log.Printf("%s [rows] changes=%d rows=%d txID=%s", prefix, len(e.Changes()), rows, e.TxID())
 
 	default:
 		log.Printf("%s [unknown event type]", prefix)

@@ -1,6 +1,7 @@
 package inspector
 
 import (
+	"crypto/tls"
 	"testing"
 
 	"github.com/cursus-io/tabellarius/pkg/config"
@@ -21,6 +22,16 @@ func TestParseDSN(t *testing.T) {
 	}
 	if b.host != "localhost" || b.port != 3307 {
 		t.Fatalf("host parse failed: %s:%d", b.host, b.port)
+	}
+}
+
+func TestRequiredTLSConfig(t *testing.T) {
+	cfg := requiredTLSConfig()
+	if cfg.MinVersion != tls.VersionTLS12 {
+		t.Fatalf("minimum TLS version = %d, want TLS 1.2", cfg.MinVersion)
+	}
+	if !cfg.InsecureSkipVerify {
+		t.Fatal("required-mode TLS must not require a managed CA bundle")
 	}
 }
 
@@ -206,5 +217,24 @@ func TestNewBinlogInspector_RegistersOnlyConfiguredTables(t *testing.T) {
 	}
 	if _, ok := b.tableMeta["commerce.tabellarius_cdc_log"]; ok {
 		t.Fatal("tabellarius_cdc_log must not be registered for capture")
+	}
+}
+
+func TestRowToMapExcludesConfiguredColumns(t *testing.T) {
+	got := rowToMap(
+		[]string{"id", "email", "password_hash", "future_secret"},
+		[]interface{}{1, "seller@example.com", "secret", "unknown-secret"},
+		map[string]struct{}{"id": {}, "email": {}, "password_hash": {}},
+		map[string]struct{}{"password_hash": {}},
+	)
+
+	if _, ok := got["password_hash"]; ok {
+		t.Fatal("password_hash must be excluded before publishing")
+	}
+	if _, ok := got["future_secret"]; ok {
+		t.Fatal("unknown columns must fail closed when an include policy exists")
+	}
+	if got["id"] != 1 || got["email"] != "seller@example.com" {
+		t.Fatalf("unexpected sanitized row: %#v", got)
 	}
 }
