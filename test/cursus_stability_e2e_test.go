@@ -42,6 +42,9 @@ func restartAndAssertPublish(t *testing.T, service, scenario string) {
 	since := time.Now().UTC()
 
 	runCompose(t, "restart", service)
+	if service == "cdc-server" {
+		waitForServiceLog(t, service, since, "[binlog] stream started")
+	}
 	if service == "broker" {
 		waitForContainer(t, "tabellarius-cursus", "healthy")
 	}
@@ -60,6 +63,21 @@ func restartAndAssertPublish(t *testing.T, service, scenario string) {
 	}
 
 	t.Fatalf("%s: new MySQL transaction was not published after restart", scenario)
+}
+
+func waitForServiceLog(t *testing.T, service string, since time.Time, expected string) {
+	t.Helper()
+
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		logs := composeOutput(t, "logs", "--since", since.Format(time.RFC3339Nano), service)
+		if strings.Contains(logs, expected) {
+			return
+		}
+		time.Sleep(2 * time.Second)
+	}
+
+	t.Fatalf("%s did not log %q after restart", service, expected)
 }
 
 func initializeCDC(t *testing.T) {

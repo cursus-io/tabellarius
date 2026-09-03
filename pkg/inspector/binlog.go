@@ -107,6 +107,7 @@ func (b *BinlogInspector) Start(ctx context.Context, out chan<- model.Event) err
 	if err != nil {
 		return err
 	}
+	log.Printf("[binlog] stream started file=%s pos=%d", startPos.Name, startPos.Pos)
 
 	for {
 		select {
