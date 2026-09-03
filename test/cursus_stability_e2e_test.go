@@ -74,10 +74,28 @@ func waitForServiceLog(t *testing.T, service string, since time.Time, expected s
 		if strings.Contains(logs, expected) {
 			return
 		}
+		if strings.Contains(logs, "[binlog] stream failed:") {
+			t.Fatalf("%s failed to start its binlog stream: %s", service, safeCDCStartupDiagnostics(logs))
+		}
 		time.Sleep(2 * time.Second)
 	}
 
 	t.Fatalf("%s did not log %q after restart", service, expected)
+}
+
+func safeCDCStartupDiagnostics(logs string) string {
+	lines := strings.Split(logs, "\n")
+	filtered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "password") || strings.Contains(lower, "dsn") || strings.Contains(line, "@") {
+			continue
+		}
+		if strings.Contains(line, "[binlog]") || strings.Contains(line, "[FATAL]") {
+			filtered = append(filtered, line)
+		}
+	}
+	return strings.Join(filtered, "\n")
 }
 
 func initializeCDC(t *testing.T) {
