@@ -17,6 +17,8 @@ type fakePublisher struct {
 	err     error
 	closed  bool
 	flushed bool
+	acked   uint64
+	noAck   bool
 }
 
 func TestPublisherLogDoesNotRenderRowValues(t *testing.T) {
@@ -51,6 +53,13 @@ func (p *fakePublisher) Send(message string) (uint64, error) {
 
 func (p *fakePublisher) Flush() {
 	p.flushed = true
+	if p.err == nil && !p.noAck {
+		p.acked++
+	}
+}
+
+func (p *fakePublisher) GetUniqueAckCount() uint64 {
+	return p.acked
 }
 
 func (p *fakePublisher) Close() error {
@@ -106,5 +115,14 @@ func TestPublisherReturnsClientError(t *testing.T) {
 	}
 	if fake.flushed {
 		t.Fatal("publisher was flushed after Send returned an error")
+	}
+}
+
+func TestPublisherRejectsMissingBrokerAcknowledgement(t *testing.T) {
+	publisher := &Publisher{pub: &fakePublisher{noAck: true}}
+	event := model.NewTransactionBoundaryEvent(model.SourceMySQLBinlog, model.MySQLOffset{}, time.Now(), "tx-1", model.TxCommit)
+
+	if err := publisher.Publish(event); err == nil || !strings.Contains(err.Error(), "acknowledgement") {
+		t.Fatalf("Publish() error = %v, want missing acknowledgement", err)
 	}
 }

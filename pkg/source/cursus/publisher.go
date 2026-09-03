@@ -17,6 +17,7 @@ type Publisher struct {
 type publisherClient interface {
 	Send(message string) (uint64, error)
 	Flush()
+	GetUniqueAckCount() uint64
 	Close() error
 }
 
@@ -68,11 +69,15 @@ func (p *Publisher) Publish(evt model.Event) error {
 		return fmt.Errorf("failed to marshal event: %w", err)
 	}
 
+	ackCount := p.pub.GetUniqueAckCount()
 	_, err = p.pub.Send(string(eventJSON))
 	if err != nil {
 		return fmt.Errorf("failed to publish message to cursus: %w", err)
 	}
 	p.pub.Flush()
+	if p.pub.GetUniqueAckCount() <= ackCount {
+		return fmt.Errorf("failed to publish message to cursus: broker acknowledgement was not received")
+	}
 
 	p.logEvent(evt)
 
