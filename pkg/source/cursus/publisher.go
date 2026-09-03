@@ -89,11 +89,10 @@ func (p *Publisher) logEvent(evt model.Event) {
 		log.Printf("%s [ddl] txID=%s query=%s", prefix, e.TxID(), e.Query())
 
 	case model.RowChangeEvent:
-		rows := 0
 		for _, change := range e.Changes() {
-			rows += len(change.Rows)
+			log.Printf("%s [rows] table=%s.%s op=%s rows=%d txID=%s",
+				prefix, change.Schema, change.Table, change.Op, len(change.Rows), e.TxID())
 		}
-		log.Printf("%s [rows] changes=%d rows=%d txID=%s", prefix, len(e.Changes()), rows, e.TxID())
 
 	default:
 		log.Printf("%s [unknown event type]", prefix)
