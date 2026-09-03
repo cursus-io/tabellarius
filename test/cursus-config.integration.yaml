@@ -4,7 +4,7 @@ topic: "tabellarius.cdc"
 auto_create_topics: true
 partitions: 1
 enable_idempotence: true
-acks: "1"
+acks: "all"
 max_retries: 5
 retry_backoff_ms: 200
 ack_timeout_ms: 5000
