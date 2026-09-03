@@ -2,7 +2,7 @@ version: "3.9"
 
 services:
   broker:
-    image: ghcr.io/cursus-io/cursus:latest
+    image: ghcr.io/cursus-io/cursus@sha256:62ef32f2a9ad5ed0f5c1235792e88432073c0b60aaefdc4acf1065203519e97a
     container_name: tabellarius-cursus
     command: ["./broker"]
     environment:

@@ -8,13 +8,15 @@ import (
 	"github.com/cursus-io/tabellarius/pkg/inspector"
 	"github.com/cursus-io/tabellarius/pkg/model"
 	"github.com/cursus-io/tabellarius/pkg/source/cursus"
-	"github.com/cursus-io/tabellarius/pkg/util"
 )
 
 func NewFromConfig(db *sql.DB, cfg *config.Config) (*TabellariusSource, error) {
 	switch cfg.Database.Type {
 	case model.MySQL, model.MariaDB:
-		return NewMySQLSource(db, cfg.Database.Type, cfg.Database.Schema, cfg.DSN(), cfg.CDCServer.OffsetFile, cfg.CDCServer.PublisherConfig, cfg.Tables)
+		if cfg.CDCServer.ServerID == 0 {
+			return nil, fmt.Errorf("server_id must be non-zero")
+		}
+		return NewMySQLSource(db, cfg.Database.Type, cfg.Database.Schema, cfg.DSN(), cfg.CDCServer.OffsetFile, cfg.CDCServer.PublisherConfig, cfg.CDCServer.ServerID, cfg.Tables)
 	case model.Postgres:
 		return nil, fmt.Errorf("postgres source not implemented")
 	default:
@@ -22,9 +24,9 @@ func NewFromConfig(db *sql.DB, cfg *config.Config) (*TabellariusSource, error) {
 	}
 }
 
-func NewMySQLSource(db *sql.DB, dbType model.DatabaseType, dbSchema, dbDSN string, offsetPath string, pubConfigPath string, tables []config.Table) (*TabellariusSource, error) {
+func NewMySQLSource(db *sql.DB, dbType model.DatabaseType, dbSchema, dbDSN string, offsetPath string, pubConfigPath string, serverID uint32, tables []config.Table) (*TabellariusSource, error) {
 	binlogOffset := offsetPath + ".binlog"
-	ins, err := inspector.NewBinlogInspector(db, dbType, dbSchema, dbDSN, binlogOffset, util.GenerateID(), tables)
+	ins, err := inspector.NewBinlogInspector(db, dbType, dbSchema, dbDSN, binlogOffset, serverID, tables)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create binlog inspector: %w", err)
 	}

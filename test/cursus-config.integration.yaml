@@ -3,7 +3,9 @@ broker_addrs:
 topic: "tabellarius.cdc"
 auto_create_topics: true
 partitions: 1
-enable_idempotence: true
+# The E2E broker is a single node. Production uses its explicitly configured
+# replication topology and acknowledgement policy.
+enable_idempotence: false
 acks: "1"
 max_retries: 5
 retry_backoff_ms: 200

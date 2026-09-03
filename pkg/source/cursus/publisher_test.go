@@ -1,8 +1,11 @@
 package cursus
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"log"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,11 +16,50 @@ type fakePublisher struct {
 	message string
 	err     error
 	closed  bool
+	flushed bool
+	acked   uint64
+	noAck   bool
 }
 
-func (p *fakePublisher) PublishMessage(message string) (uint64, error) {
+func TestPublisherLogDoesNotRenderRowValues(t *testing.T) {
+	var output bytes.Buffer
+	writer, flags := log.Writer(), log.Flags()
+	log.SetOutput(&output)
+	log.SetFlags(0)
+	defer func() {
+		log.SetOutput(writer)
+		log.SetFlags(flags)
+	}()
+
+	publisher := &Publisher{}
+	publisher.logEvent(model.NewTransactionEvent(
+		model.SourceMySQLBinlog,
+		model.MySQLOffset{File: "mysql-bin.000001", Pos: 42},
+		time.Now(),
+		"tx-1",
+		[]model.RowChange{{Schema: "commerce", Table: "members", Op: model.OpUpdate, Rows: []model.RowData{{Before: map[string]any{"password_hash": "secret-before"}, After: map[string]any{"password_hash": "secret-after"}}}}},
+	))
+
+	got := output.String()
+	if strings.Contains(got, "secret-before") || strings.Contains(got, "secret-after") || strings.Contains(got, "password_hash") {
+		t.Fatalf("row values leaked to log: %s", got)
+	}
+}
+
+func (p *fakePublisher) Send(message string) (uint64, error) {
 	p.message = message
 	return 1, p.err
+}
+
+func (p *fakePublisher) Flush() {
+	p.flushed = true
+	if p.err == nil && !p.noAck {
+		p.acked++
+	}
+}
+
+func (p *fakePublisher) GetUniqueAckCount() uint64 {
+	return p.acked
 }
 
 func (p *fakePublisher) Close() error {
@@ -50,6 +92,9 @@ func TestPublisherPublishesSerializableTransaction(t *testing.T) {
 	if len(payload.Changes) != 1 || payload.Changes[0].Table != "orders" {
 		t.Fatalf("changes were not preserved: %+v", payload.Changes)
 	}
+	if !fake.flushed {
+		t.Fatal("publisher was not flushed after send")
+	}
 
 	if err := publisher.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -61,10 +106,23 @@ func TestPublisherPublishesSerializableTransaction(t *testing.T) {
 
 func TestPublisherReturnsClientError(t *testing.T) {
 	want := errors.New("broker unavailable")
-	publisher := &Publisher{pub: &fakePublisher{err: want}}
+	fake := &fakePublisher{err: want}
+	publisher := &Publisher{pub: fake}
 	event := model.NewTransactionBoundaryEvent(model.SourceMySQLBinlog, model.MySQLOffset{}, time.Now(), "tx-1", model.TxCommit)
 
 	if err := publisher.Publish(event); !errors.Is(err, want) {
 		t.Fatalf("Publish() error = %v, want wrapped %v", err, want)
+	}
+	if fake.flushed {
+		t.Fatal("publisher was flushed after Send returned an error")
+	}
+}
+
+func TestPublisherRejectsMissingBrokerAcknowledgement(t *testing.T) {
+	publisher := &Publisher{pub: &fakePublisher{noAck: true}}
+	event := model.NewTransactionBoundaryEvent(model.SourceMySQLBinlog, model.MySQLOffset{}, time.Now(), "tx-1", model.TxCommit)
+
+	if err := publisher.Publish(event); err == nil || !strings.Contains(err.Error(), "acknowledgement") {
+		t.Fatalf("Publish() error = %v, want missing acknowledgement", err)
 	}
 }

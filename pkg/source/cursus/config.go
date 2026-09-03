@@ -38,14 +38,9 @@ func loadPublisherConfig(configPath string) (*sdk.PublisherConfig, error) {
 	}
 
 	switch strings.ToLower(strings.TrimSpace(metadata.LogLevel)) {
-	case "", "info":
-		cfg.LogLevel = sdk.LogLevelInfo
-	case "debug":
-		cfg.LogLevel = sdk.LogLevelDebug
-	case "warn", "warning":
-		cfg.LogLevel = sdk.LogLevelWarn
-	case "error":
-		cfg.LogLevel = sdk.LogLevelError
+	case "", "info", "debug", "warn", "warning", "error":
+		// Wire v2 no longer exposes a per-producer log level. Retain
+		// validation so existing configuration remains accepted.
 	default:
 		return nil, fmt.Errorf("invalid publisher log_level %q", metadata.LogLevel)
 	}

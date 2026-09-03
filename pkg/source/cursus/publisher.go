@@ -15,7 +15,9 @@ type Publisher struct {
 }
 
 type publisherClient interface {
-	PublishMessage(message string) (uint64, error)
+	Send(message string) (uint64, error)
+	Flush()
+	GetUniqueAckCount() uint64
 	Close() error
 }
 
@@ -62,17 +64,22 @@ func (p *Publisher) Publish(evt model.Event) error {
 		return fmt.Errorf("broker publisher not initialized")
 	}
 
-	p.logEvent(evt)
-
 	eventJSON, err := marshalEvent(evt)
 	if err != nil {
 		return fmt.Errorf("failed to marshal event: %w", err)
 	}
 
-	_, err = p.pub.PublishMessage(string(eventJSON))
+	ackCount := p.pub.GetUniqueAckCount()
+	_, err = p.pub.Send(string(eventJSON))
 	if err != nil {
 		return fmt.Errorf("failed to publish message to cursus: %w", err)
 	}
+	p.pub.Flush()
+	if p.pub.GetUniqueAckCount() <= ackCount {
+		return fmt.Errorf("failed to publish message to cursus: broker acknowledgement was not received")
+	}
+
+	p.logEvent(evt)
 
 	return nil
 }
@@ -89,19 +96,9 @@ func (p *Publisher) logEvent(evt model.Event) {
 		log.Printf("%s [ddl] txID=%s query=%s", prefix, e.TxID(), e.Query())
 
 	case model.RowChangeEvent:
-		for ci, change := range e.Changes() {
-			for ri, row := range change.Rows {
-				if change.Op == model.OpUpdate && row.Before != nil && row.After != nil {
-					beforeJSON, _ := json.Marshal(row.Before)
-					afterJSON, _ := json.Marshal(row.After)
-					log.Printf("%s [row][%d:%d] table=%s.%s txID=%s op=UPDATE before=%s after=%s",
-						prefix, ci, ri, change.Schema, change.Table, e.TxID(),
-						string(beforeJSON), string(afterJSON))
-				} else {
-					log.Printf("%s [row][%d:%d] table=%s.%s txID=%s op=%s",
-						prefix, ci, ri, change.Schema, change.Table, e.TxID(), change.Op)
-				}
-			}
+		for _, change := range e.Changes() {
+			log.Printf("%s [rows] table=%s.%s op=%s rows=%d txID=%s",
+				prefix, change.Schema, change.Table, change.Op, len(change.Rows), e.TxID())
 		}
 
 	default:

@@ -42,6 +42,9 @@ func restartAndAssertPublish(t *testing.T, service, scenario string) {
 	since := time.Now().UTC()
 
 	runCompose(t, "restart", service)
+	if service == "cdc-server" {
+		waitForServiceLog(t, service, since, "[binlog] stream started")
+	}
 	if service == "broker" {
 		waitForContainer(t, "tabellarius-cursus", "healthy")
 	}
@@ -60,6 +63,42 @@ func restartAndAssertPublish(t *testing.T, service, scenario string) {
 	}
 
 	t.Fatalf("%s: new MySQL transaction was not published after restart", scenario)
+}
+
+func waitForServiceLog(t *testing.T, service string, since time.Time, expected string) {
+	t.Helper()
+
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		logs := composeOutput(t, "logs", "--since", since.Format(time.RFC3339Nano), service)
+		if strings.Contains(logs, expected) {
+			return
+		}
+		if strings.Contains(logs, "[binlog] stream failed:") {
+			t.Fatalf("%s failed to start its binlog stream: %s", service, safeCDCStartupDiagnostics(logs))
+		}
+		if strings.Contains(logs, "[FATAL]") {
+			t.Fatalf("%s failed before starting its binlog stream: %s", service, safeCDCStartupDiagnostics(logs))
+		}
+		time.Sleep(2 * time.Second)
+	}
+
+	t.Fatalf("%s did not log %q after restart", service, expected)
+}
+
+func safeCDCStartupDiagnostics(logs string) string {
+	lines := strings.Split(logs, "\n")
+	filtered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "password") || strings.Contains(lower, "dsn") || strings.Contains(line, "@") {
+			continue
+		}
+		if strings.Contains(line, "[binlog]") || strings.Contains(line, "[FATAL]") {
+			filtered = append(filtered, line)
+		}
+	}
+	return strings.Join(filtered, "\n")
 }
 
 func initializeCDC(t *testing.T) {
@@ -99,20 +138,29 @@ func waitForContainer(t *testing.T, name, expectedStatus string) {
 func assertTopicHasRecords(t *testing.T) {
 	t.Helper()
 
-	cfg := sdk.NewDefaultConsumerConfig()
-	cfg.BrokerAddrs = []string{"127.0.0.1:9000"}
-	client, err := sdk.NewConsumerClient(cfg)
-	if err != nil {
-		t.Fatalf("NewConsumerClient() error = %v", err)
+	deadline := time.Now().Add(60 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		cfg := sdk.NewDefaultConsumerConfig()
+		cfg.BrokerAddrs = []string{"127.0.0.1:9000"}
+		client, err := sdk.NewConsumerClient(cfg)
+		if err == nil {
+			offsets, err := client.ListOffsets(topicName, 0)
+			if err == nil && len(offsets) == 1 && offsets[0].LEO > 0 {
+				return
+			}
+			if err == nil {
+				lastErr = fmt.Errorf("topic has no persisted records: %+v", offsets)
+			} else {
+				lastErr = err
+			}
+		} else {
+			lastErr = err
+		}
+		time.Sleep(2 * time.Second)
 	}
 
-	offsets, err := client.ListOffsets(topicName, 0)
-	if err != nil {
-		t.Fatalf("ListOffsets() error = %v", err)
-	}
-	if len(offsets) != 1 || offsets[0].LEO == 0 {
-		t.Fatalf("topic has no persisted records: %+v", offsets)
-	}
+	t.Fatalf("topic records did not become queryable after restart: %v", lastErr)
 }
 
 func runCompose(t *testing.T, args ...string) {

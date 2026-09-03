@@ -20,7 +20,9 @@ func (s *TabellariusSource) Start(ctx context.Context) {
 
 	go func() {
 		defer close(ch)
-		_ = s.ins.Start(ctx, ch)
+		if err := s.ins.Start(ctx, ch); err != nil && ctx.Err() == nil {
+			log.Printf("[binlog] stream failed: %v", err)
+		}
 	}()
 
 	go s.run(ctx, ch)

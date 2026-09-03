@@ -9,9 +9,11 @@ type Inspector[T any] interface {
 }
 
 type tableMeta struct {
-	pkName  string
-	pkIndex int
-	columns []string
+	pkName         string
+	pkIndex        int
+	columns        []string
+	includeColumns map[string]struct{}
+	excludeColumns map[string]struct{}
 }
 
 func NewTableMeta(pk string) *tableMeta {

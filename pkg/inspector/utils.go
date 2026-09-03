@@ -75,7 +75,7 @@ func extractPK(meta *tableMeta, row []interface{}) map[string]any {
 	return map[string]any{}
 }
 
-func rowToMap(cols []string, row []interface{}) map[string]any {
+func rowToMap(cols []string, row []interface{}, includeColumns, excludeColumns map[string]struct{}) map[string]any {
 	m := make(map[string]any, len(row))
 
 	if len(cols) == 0 {
@@ -86,6 +86,14 @@ func rowToMap(cols []string, row []interface{}) map[string]any {
 	}
 
 	for i, c := range cols {
+		if len(includeColumns) > 0 {
+			if _, included := includeColumns[c]; !included {
+				continue
+			}
+		}
+		if _, excluded := excludeColumns[c]; excluded {
+			continue
+		}
 		if i < len(row) {
 			m[c] = row[i]
 		} else {
