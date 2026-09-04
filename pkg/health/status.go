@@ -11,6 +11,11 @@ type Status struct {
 	ready                atomic.Bool
 	terminal             atomic.Bool
 	streamStarts         atomic.Uint64
+	binlogEventsReceived atomic.Uint64
+	binlogBytesReceived  atomic.Uint64
+	rowImagesReceived    atomic.Uint64
+	rowImagesCaptured    atomic.Uint64
+	rowImagesFiltered    atomic.Uint64
 	processedEvents      atomic.Uint64
 	publishFailures      atomic.Uint64
 	checkpointFailures   atomic.Uint64
@@ -18,6 +23,32 @@ type Status struct {
 	lastCheckpointUnix   atomic.Int64
 	lastEventUnix        atomic.Int64
 	lastEventLagNanosecs atomic.Int64
+}
+
+func (s *Status) BinlogEventReceived(bytes uint64) {
+	if s == nil {
+		return
+	}
+	s.binlogEventsReceived.Add(1)
+	s.binlogBytesReceived.Add(bytes)
+}
+
+func (s *Status) RowImagesReceived(count uint64) {
+	if s != nil {
+		s.rowImagesReceived.Add(count)
+	}
+}
+
+func (s *Status) RowImagesCaptured(count uint64) {
+	if s != nil {
+		s.rowImagesCaptured.Add(count)
+	}
+}
+
+func (s *Status) RowImagesFiltered(count uint64) {
+	if s != nil {
+		s.rowImagesFiltered.Add(count)
+	}
 }
 
 func NewStatus() *Status {
@@ -108,6 +139,11 @@ func (s *Status) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	}
 	_, _ = fmt.Fprintf(w, "# TYPE tabellarius_stream_ready gauge\ntabellarius_stream_ready %d\n", ready)
 	_, _ = fmt.Fprintf(w, "# TYPE tabellarius_stream_starts_total counter\ntabellarius_stream_starts_total %d\n", s.streamStarts.Load())
+	_, _ = fmt.Fprintf(w, "# TYPE tabellarius_binlog_events_received_total counter\ntabellarius_binlog_events_received_total %d\n", s.binlogEventsReceived.Load())
+	_, _ = fmt.Fprintf(w, "# TYPE tabellarius_binlog_bytes_received_total counter\ntabellarius_binlog_bytes_received_total %d\n", s.binlogBytesReceived.Load())
+	_, _ = fmt.Fprintf(w, "# TYPE tabellarius_row_images_received_total counter\ntabellarius_row_images_received_total %d\n", s.rowImagesReceived.Load())
+	_, _ = fmt.Fprintf(w, "# TYPE tabellarius_row_images_captured_total counter\ntabellarius_row_images_captured_total %d\n", s.rowImagesCaptured.Load())
+	_, _ = fmt.Fprintf(w, "# TYPE tabellarius_row_images_filtered_total counter\ntabellarius_row_images_filtered_total %d\n", s.rowImagesFiltered.Load())
 	_, _ = fmt.Fprintf(w, "# TYPE tabellarius_processed_events_total counter\ntabellarius_processed_events_total %d\n", s.processedEvents.Load())
 	_, _ = fmt.Fprintf(w, "# TYPE tabellarius_publish_failures_total counter\ntabellarius_publish_failures_total %d\n", s.publishFailures.Load())
 	_, _ = fmt.Fprintf(w, "# TYPE tabellarius_checkpoint_failures_total counter\ntabellarius_checkpoint_failures_total %d\n", s.checkpointFailures.Load())
