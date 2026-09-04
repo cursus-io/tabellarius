@@ -2,30 +2,53 @@ package source
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 
+	"github.com/cursus-io/tabellarius/pkg/health"
 	"github.com/cursus-io/tabellarius/pkg/inspector"
 	"github.com/cursus-io/tabellarius/pkg/model"
-	"github.com/cursus-io/tabellarius/pkg/source/cursus"
+	"github.com/cursus-io/tabellarius/pkg/util"
 )
 
-type TabellariusSource struct {
-	ins inspector.Inspector[model.Event]
-	pub *cursus.Publisher
+type eventPublisher interface {
+	Publish(model.Event) error
+	Close() error
 }
 
-func (s *TabellariusSource) Start(ctx context.Context) {
-	ch := make(chan model.Event, 128)
+type TabellariusSource struct {
+	ins            inspector.Inspector[model.Event]
+	pub            eventPublisher
+	checkpointPath string
+	status         *health.Status
+}
 
+func (s *TabellariusSource) Run(ctx context.Context) error {
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	events := make(chan model.Event, 128)
+	inspectorErr := make(chan error, 1)
 	go func() {
-		defer close(ch)
-		if err := s.ins.Start(ctx, ch); err != nil && ctx.Err() == nil {
-			log.Printf("[binlog] stream failed: %v", err)
-		}
+		err := s.ins.Start(runCtx, events)
+		close(events)
+		inspectorErr <- err
 	}()
 
-	go s.run(ctx, ch)
+	processErr := s.run(runCtx, events)
+	cancel()
+	streamErr := <-inspectorErr
+
+	if processErr != nil {
+		s.status.StreamFailed()
+		return processErr
+	}
+	if streamErr != nil && ctx.Err() == nil {
+		s.status.StreamFailed()
+		return fmt.Errorf("binlog stream failed: %w", streamErr)
+	}
+	return nil
 }
 
 func (s *TabellariusSource) Close() error {
@@ -35,7 +58,7 @@ func (s *TabellariusSource) Close() error {
 	return nil
 }
 
-func (s *TabellariusSource) run(ctx context.Context, in <-chan model.Event) {
+func (s *TabellariusSource) run(ctx context.Context, in <-chan model.Event) error {
 	txBuffer := map[string][]model.RowChange{}
 	var lastOffset model.Offset
 	var lastSource model.SourceType
@@ -48,21 +71,18 @@ func (s *TabellariusSource) run(ctx context.Context, in <-chan model.Event) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("Context cancelled, stopping...")
-			return
+			return nil
 
 		case evt, ok := <-in:
 			if !ok {
-				log.Println("Input channel closed, exiting loop")
-				return
+				return nil
 			}
 
 			lag := time.Since(evt.Timestamp())
 			eventCount++
-
-			// Log metrics periodically (every 1000 events)
+			s.status.EventProcessed(evt.Timestamp())
 			if eventCount%1000 == 0 {
-				log.Printf("[metrics] Processed: %d, Current Lag: %v", eventCount, lag)
+				log.Printf("[metrics] processed=%d current_lag=%v", eventCount, lag)
 			}
 
 			lastOffset = evt.Offset()
@@ -71,29 +91,52 @@ func (s *TabellariusSource) run(ctx context.Context, in <-chan model.Event) {
 			switch e := evt.(type) {
 			case model.RowChangeEvent:
 				txBuffer[e.TxID()] = append(txBuffer[e.TxID()], e.Changes()...)
+
 			case *model.BinlogDDLEvent:
-				log.Printf("[schema] DDL Detected: %s (Offset: %v)", e.Query(), lastOffset)
-				_ = s.pub.Publish(e)
+				if err := s.pub.Publish(e); err != nil {
+					s.status.PublishFailed()
+					return fmt.Errorf("publish DDL event: %w", err)
+				}
+				if err := s.saveCheckpoint(lastOffset); err != nil {
+					return err
+				}
+
 			case *model.TransactionBoundaryEvent:
 				switch e.Kind() {
 				case model.TxCommit:
-					// On Commit, bundle all buffered changes into a single transaction
 					changes := txBuffer[e.TxID()]
-					if len(changes) == 0 {
-						delete(txBuffer, e.TxID())
-						continue
-					}
-
-					txEvt := model.NewTransactionEvent(lastSource, lastOffset, e.Timestamp(), e.TxID(), changes)
-					if err := s.pub.Publish(txEvt); err != nil {
-						log.Printf("[run] Publish error for TxID %s: %v", e.TxID(), err)
+					if len(changes) > 0 {
+						txEvt := model.NewTransactionEvent(lastSource, lastOffset, e.Timestamp(), e.TxID(), changes)
+						if err := s.pub.Publish(txEvt); err != nil {
+							s.status.PublishFailed()
+							return fmt.Errorf("publish transaction %s: %w", e.TxID(), err)
+						}
 					}
 					delete(txBuffer, e.TxID())
+					if err := s.saveCheckpoint(lastOffset); err != nil {
+						return err
+					}
 
 				case model.TxRollback:
 					delete(txBuffer, e.TxID())
+					if err := s.saveCheckpoint(lastOffset); err != nil {
+						return err
+					}
 				}
 			}
 		}
 	}
+}
+
+func (s *TabellariusSource) saveCheckpoint(offset model.Offset) error {
+	mysqlOffset, ok := offset.(model.MySQLOffset)
+	if !ok {
+		return fmt.Errorf("unsupported checkpoint type %T", offset)
+	}
+	if err := util.SaveJSON(s.checkpointPath, mysqlOffset); err != nil {
+		s.status.CheckpointFailed()
+		return fmt.Errorf("save checkpoint: %w", err)
+	}
+	s.status.CheckpointSaved()
+	return nil
 }

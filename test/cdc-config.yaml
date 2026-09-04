@@ -12,10 +12,15 @@ cdc_log:
 tables:
   - name: orders
     pk: id
+    include_columns: [id, user_id, amount, status, created_at]
   - name: users
     pk: id
+    include_columns: [id, email, name, created_at]
 
 cdc_server:
   server_id: 9106002
-  offset_file: offset.txt
+  offset_file: /tmp/tabellarius-offset
   publisher_config: /config.yaml
+  require_gtid: true
+  allow_single_replica_publisher: true
+  health_address: :8080

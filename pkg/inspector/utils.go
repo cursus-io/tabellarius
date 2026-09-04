@@ -3,30 +3,33 @@ package inspector
 import (
 	"fmt"
 	"log"
+	"net"
+	"strconv"
 	"strings"
 
-	"github.com/go-mysql-org/go-mysql/replication"
+	mysqldriver "github.com/go-sql-driver/mysql"
 )
 
 func (b *BinlogInspector) parseDSN() error {
-	parts := strings.Split(b.dsn, "@tcp(")
-	if len(parts) != 2 {
-		return fmt.Errorf("invalid dsn")
+	parsed, err := mysqldriver.ParseDSN(b.dsn)
+	if err != nil {
+		return fmt.Errorf("parse MySQL DSN: %w", err)
 	}
-
-	auth := strings.Split(parts[0], ":")
-	addr := strings.Split(strings.TrimSuffix(parts[1], ")"), ":")
-
-	b.user = auth[0]
-	b.password = auth[1]
-	b.host = addr[0]
-	b.port = 3306
-
-	if len(addr) == 2 {
-		if _, err := fmt.Sscanf(addr[1], "%d", &b.port); err != nil {
-			return fmt.Errorf("invalid port in DSN: %w", err)
-		}
+	if parsed.Net != "tcp" {
+		return fmt.Errorf("MySQL replication requires tcp DSN, got %q", parsed.Net)
 	}
+	host, portValue, err := net.SplitHostPort(parsed.Addr)
+	if err != nil {
+		return fmt.Errorf("parse MySQL address: %w", err)
+	}
+	port, err := strconv.ParseUint(portValue, 10, 16)
+	if err != nil {
+		return fmt.Errorf("parse MySQL port: %w", err)
+	}
+	b.user = parsed.User
+	b.password = parsed.Passwd
+	b.host = host
+	b.port = uint16(port)
 
 	return nil
 }
@@ -43,7 +46,11 @@ func (b *BinlogInspector) fetchColumns(schema, table string) []string {
 		log.Printf("[binlog] failed to query columns for table %s.%s: %v", schema, table, err)
 		return nil
 	}
-	defer rows.Close()
+	defer func() {
+		if err := rows.Close(); err != nil {
+			log.Printf("[binlog] failed to close column metadata rows: %v", err)
+		}
+	}()
 
 	var cols []string
 	for rows.Next() {
@@ -58,30 +65,17 @@ func (b *BinlogInspector) fetchColumns(schema, table string) []string {
 	return cols
 }
 
-func isDML(e *replication.QueryEvent) bool {
-	q := string(e.Query)
-	return strings.HasPrefix(q, "INSERT") || strings.HasPrefix(q, "UPDATE") || strings.HasPrefix(q, "DELETE")
-}
-
-func extractPK(meta *tableMeta, row []interface{}) map[string]any {
-	if meta.pkIndex >= 0 && meta.pkIndex < len(row) {
-		return map[string]any{meta.pkName: row[meta.pkIndex]}
+func extractPK(meta *tableMeta, row []interface{}) (map[string]any, error) {
+	if meta.pkIndex < 0 || meta.pkIndex >= len(row) {
+		return nil, fmt.Errorf("primary key column %s is absent from row image", meta.pkName)
 	}
-
-	if len(row) > 0 {
-		return map[string]any{meta.pkName: row[0]}
-	}
-
-	return map[string]any{}
+	return map[string]any{meta.pkName: row[meta.pkIndex]}, nil
 }
 
 func rowToMap(cols []string, row []interface{}, includeColumns, excludeColumns map[string]struct{}) map[string]any {
 	m := make(map[string]any, len(row))
 
 	if len(cols) == 0 {
-		for i, v := range row {
-			m[fmt.Sprintf("col_%d", i)] = v
-		}
 		return m
 	}
 
@@ -130,10 +124,10 @@ func splitKey(key string) (string, string) {
 	return parts[0], parts[1]
 }
 
-func (b *BinlogInspector) updatePKIndex(key string) {
+func (b *BinlogInspector) updatePKIndex(key string) error {
 	meta, ok := b.tableMeta[key]
 	if !ok {
-		return
+		return nil
 	}
 
 	meta.pkIndex = -1
@@ -145,7 +139,7 @@ func (b *BinlogInspector) updatePKIndex(key string) {
 	}
 
 	if meta.pkIndex == -1 {
-		log.Printf("[binlog] pk %s not found in table %s after DDL, fallback to 0", meta.pkName, key)
-		meta.pkIndex = 0
+		return fmt.Errorf("configured primary key %s not found in table %s after DDL", meta.pkName, key)
 	}
+	return nil
 }

@@ -59,11 +59,19 @@ func main() {
 	}
 
 	driver := cfg.Database.Type.DriverName()
-	db, err := sql.Open(driver, cfg.DSN())
+	connection, err := cfg.DatabaseConnection()
+	if err != nil {
+		log.Fatalf("failed to prepare database connection: %v", err)
+	}
+	db, err := sql.Open(driver, connection.DSN)
 	if err != nil {
 		log.Fatalf("failed to open db: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			log.Printf("failed to close database: %v", err)
+		}
+	}()
 
 	log.Printf("mode=%s apply=%v", *mode, *apply)
 

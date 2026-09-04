@@ -72,3 +72,16 @@ func TestBinlogRowEvent_Interface(t *testing.T) {
 		t.Fatal("row content mismatch")
 	}
 }
+
+func TestMySQLOffsetUsesStableGTIDIdentity(t *testing.T) {
+	offset := MySQLOffset{
+		File:    "mysql-bin.000123",
+		Pos:     456,
+		GTID:    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee:42",
+		GTIDSet: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee:1-42",
+	}
+
+	if got, want := offset.String(), "mysql-gtid:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee:42"; got != want {
+		t.Fatalf("offset.String() = %q, want %q", got, want)
+	}
+}

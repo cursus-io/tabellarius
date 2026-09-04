@@ -5,7 +5,10 @@ log_level: "info"
 max_retries: 1
 retry_backoff_ms: 50
 
-acks: "1"
+topic: "tabellarius.cdc"
+auto_create_topics: false
+enable_idempotence: true
+acks: "all"
 num_messages: 100000
 partitions: 12
 max_inflight_requests: 10

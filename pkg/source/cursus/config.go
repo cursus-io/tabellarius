@@ -44,6 +44,5 @@ func loadPublisherConfig(configPath string) (*sdk.PublisherConfig, error) {
 	default:
 		return nil, fmt.Errorf("invalid publisher log_level %q", metadata.LogLevel)
 	}
-
 	return cfg, nil
 }

@@ -2,7 +2,7 @@ version: "3.9"
 
 services:
   broker:
-    image: ghcr.io/cursus-io/cursus@sha256:62ef32f2a9ad5ed0f5c1235792e88432073c0b60aaefdc4acf1065203519e97a
+    image: ghcr.io/cursus-io/cursus@sha256:8da30e5c047d879173341ac5531df7cf71591f65445132ffb920efb19b5f49bf
     container_name: tabellarius-cursus
     command: ["./broker"]
     environment:
@@ -27,6 +27,9 @@ services:
     command:
       - --log-bin=mysql-bin
       - --binlog-format=ROW
+      - --binlog-row-image=FULL
+      - --gtid-mode=ON
+      - --enforce-gtid-consistency=ON
     volumes:
       - ./sql:/docker-entrypoint-initdb.d:ro
     healthcheck:
@@ -57,3 +60,8 @@ services:
       - ./cdc-config.yaml:/app/cdc-config.yaml
       - ./cursus-config.integration.yaml:/config.yaml:ro
     entrypoint: ["cdc-server"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/readyz"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
