@@ -3,6 +3,7 @@
 package test
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/cursus-io/cursus/sdk"
+	"github.com/cursus-io/tabellarius/pkg/model"
 )
 
 const (
@@ -26,15 +28,38 @@ func TestCursusRestartRecoveryE2E(t *testing.T) {
 	runCompose(t, "down")
 	t.Cleanup(func() { runCompose(t, "down") })
 
+	runCompose(t, "build", "cdc-cli", "cdc-server")
 	runCompose(t, "up", "-d", "--build", "broker", "mysql")
 	waitForContainer(t, "cdc-mysql", "healthy")
 	waitForContainer(t, "tabellarius-cursus", "healthy")
+	waitForCursusWireReady(t)
 	initializeCDC(t)
 	runCompose(t, "up", "-d", "cdc-server")
 
 	restartAndAssertPublish(t, "cdc-server", "CDC server restart recovery")
 	restartAndAssertPublish(t, "broker", "Cursus broker restart recovery")
 	assertTopicHasRecords(t)
+	assertGTIDCheckpoint(t)
+}
+
+func assertGTIDCheckpoint(t *testing.T) {
+	t.Helper()
+
+	cmd := exec.Command("docker", "exec", "cdc-server", "cat", "/tmp/tabellarius-offset.binlog")
+	data, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("read CDC checkpoint: %v", err)
+	}
+	var offset model.MySQLOffset
+	if err := json.Unmarshal(data, &offset); err != nil {
+		t.Fatalf("decode CDC checkpoint: %v", err)
+	}
+	if offset.GTID == "" || offset.GTIDSet == "" {
+		t.Fatalf("checkpoint is not GTID-resumable: file=%q pos=%d", offset.File, offset.Pos)
+	}
+	if strings.HasPrefix(offset.GTID, "00000000-0000-0000-0000-000000000000:") || strings.HasSuffix(offset.GTID, ":0") {
+		t.Fatalf("checkpoint contains an anonymous or zero GTID: %q", offset.GTID)
+	}
 }
 
 func restartAndAssertPublish(t *testing.T, service, scenario string) {
@@ -62,28 +87,54 @@ func restartAndAssertPublish(t *testing.T, service, scenario string) {
 		time.Sleep(2 * time.Second)
 	}
 
-	t.Fatalf("%s: new MySQL transaction was not published after restart", scenario)
+	logs := composeOutput(t, "logs", "--since", since.Format(time.RFC3339Nano), "cdc-server")
+	t.Fatalf("%s: new MySQL transaction was not published after restart: %s", scenario, safeCDCStartupDiagnostics(logs))
 }
 
 func waitForServiceLog(t *testing.T, service string, since time.Time, expected string) {
 	t.Helper()
 
 	deadline := time.Now().Add(60 * time.Second)
+	var lastDiagnostics string
 	for time.Now().Before(deadline) {
 		logs := composeOutput(t, "logs", "--since", since.Format(time.RFC3339Nano), service)
 		if strings.Contains(logs, expected) {
 			return
 		}
-		if strings.Contains(logs, "[binlog] stream failed:") {
-			t.Fatalf("%s failed to start its binlog stream: %s", service, safeCDCStartupDiagnostics(logs))
-		}
-		if strings.Contains(logs, "[FATAL]") {
-			t.Fatalf("%s failed before starting its binlog stream: %s", service, safeCDCStartupDiagnostics(logs))
+		if strings.Contains(logs, "[binlog]") || strings.Contains(logs, "[FATAL]") {
+			lastDiagnostics = safeCDCStartupDiagnostics(logs)
 		}
 		time.Sleep(2 * time.Second)
 	}
 
-	t.Fatalf("%s did not log %q after restart", service, expected)
+	t.Fatalf("%s did not log %q after restart: %s", service, expected, lastDiagnostics)
+}
+
+func waitForCursusWireReady(t *testing.T) {
+	t.Helper()
+
+	deadline := time.Now().Add(60 * time.Second)
+	var lastErr error
+	partitions := 1
+	idempotent := false
+	for time.Now().Before(deadline) {
+		cfg := sdk.NewDefaultAdminConfig()
+		cfg.BrokerAddrs = []string{"127.0.0.1:9000"}
+		client, err := sdk.NewAdminClient(cfg)
+		if err == nil {
+			_, err = client.CreateTopic(topicName, sdk.TopicDefinitionPatch{
+				Partitions: &partitions,
+				Idempotent: &idempotent,
+			})
+			if err == nil {
+				return
+			}
+		}
+		lastErr = err
+		time.Sleep(2 * time.Second)
+	}
+
+	t.Fatalf("Cursus wire protocol did not become ready: %v", lastErr)
 }
 
 func safeCDCStartupDiagnostics(logs string) string {
@@ -94,7 +145,8 @@ func safeCDCStartupDiagnostics(logs string) string {
 		if strings.Contains(lower, "password") || strings.Contains(lower, "dsn") || strings.Contains(line, "@") {
 			continue
 		}
-		if strings.Contains(line, "[binlog]") || strings.Contains(line, "[FATAL]") {
+		if strings.Contains(line, "[binlog]") || strings.Contains(line, "[publish]") ||
+			strings.Contains(line, "[WARN]") || strings.Contains(line, "[ERROR]") || strings.Contains(line, "[FATAL]") {
 			filtered = append(filtered, line)
 		}
 	}

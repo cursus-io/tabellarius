@@ -14,6 +14,10 @@ type Publisher struct {
 	pub publisherClient
 }
 
+type PublisherOptions struct {
+	AllowSingleReplica bool
+}
+
 type publisherClient interface {
 	Send(message string) (uint64, error)
 	Flush()
@@ -33,6 +37,10 @@ type eventPayload struct {
 }
 
 func NewCursusPublisher(configPath string) (*Publisher, error) {
+	return NewCursusPublisherWithOptions(configPath, PublisherOptions{})
+}
+
+func NewCursusPublisherWithOptions(configPath string, options PublisherOptions) (*Publisher, error) {
 	if configPath == "" {
 		configPath = "/config.yaml"
 	}
@@ -40,6 +48,17 @@ func NewCursusPublisher(configPath string) (*Publisher, error) {
 	cfg, err := loadPublisherConfig(configPath)
 	if err != nil {
 		return nil, err
+	}
+	if !options.AllowSingleReplica {
+		if cfg.AutoCreateTopics {
+			return nil, fmt.Errorf("auto_create_topics must be false for CDC publishing")
+		}
+		if cfg.Acks != "all" && cfg.Acks != "-1" {
+			return nil, fmt.Errorf("CDC publishing requires acks=all, got %q", cfg.Acks)
+		}
+		if !cfg.EnableIdempotence {
+			return nil, fmt.Errorf("CDC publishing requires enable_idempotence=true")
+		}
 	}
 
 	pub, err := sdk.NewProducer(cfg)
@@ -93,7 +112,7 @@ func (p *Publisher) logEvent(evt model.Event) {
 		log.Printf("%s [tx] kind=%s txID=%s", prefix, e.Kind(), e.TxID())
 
 	case *model.BinlogDDLEvent:
-		log.Printf("%s [ddl] txID=%s query=%s", prefix, e.TxID(), e.Query())
+		log.Printf("%s [ddl] txID=%s", prefix, e.TxID())
 
 	case model.RowChangeEvent:
 		for _, change := range e.Changes() {

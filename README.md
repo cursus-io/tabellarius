@@ -35,7 +35,7 @@ Docker images are published to GitHub Container Registry:
 
 ```bash
 docker pull ghcr.io/cursus-io/tabellarius:latest
-docker run --rm ghcr.io/cursus-io/tabellarius:latest cdc-server --help
+docker run --rm ghcr.io/cursus-io/tabellarius:latest --help
 ```
 
 Versioned release images are available with release tags:
@@ -43,3 +43,7 @@ Versioned release images are available with release tags:
 ```bash
 docker pull ghcr.io/cursus-io/tabellarius:<version>
 ```
+
+Production deployments must select a main or release build by immutable digest,
+for example `ghcr.io/cursus-io/tabellarius@sha256:<digest>`. Do not deploy the
+`latest` or branch tags.

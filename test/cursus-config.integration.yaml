@@ -1,7 +1,7 @@
 broker_addrs:
   - "broker:9000"
 topic: "tabellarius.cdc"
-auto_create_topics: true
+auto_create_topics: false
 partitions: 1
 # The E2E broker is a single node. Production uses its explicitly configured
 # replication topology and acknowledgement policy.

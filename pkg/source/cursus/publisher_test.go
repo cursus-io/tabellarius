@@ -46,6 +46,29 @@ func TestPublisherLogDoesNotRenderRowValues(t *testing.T) {
 	}
 }
 
+func TestPublisherLogDoesNotRenderDDLQuery(t *testing.T) {
+	var output bytes.Buffer
+	writer, flags := log.Writer(), log.Flags()
+	log.SetOutput(&output)
+	log.SetFlags(0)
+	defer func() {
+		log.SetOutput(writer)
+		log.SetFlags(flags)
+	}()
+
+	publisher := &Publisher{}
+	publisher.logEvent(model.NewBinlogDDLEvent(
+		model.SourceMySQLBinlog,
+		model.MySQLOffset{File: "mysql-bin.000001", Pos: 42},
+		time.Now(),
+		"tx-1",
+		"CREATE USER sensitive IDENTIFIED BY 'do-not-log'",
+	))
+	if got := output.String(); strings.Contains(got, "do-not-log") || strings.Contains(got, "CREATE USER") {
+		t.Fatalf("DDL query leaked to log: %s", got)
+	}
+}
+
 func (p *fakePublisher) Send(message string) (uint64, error) {
 	p.message = message
 	return 1, p.err

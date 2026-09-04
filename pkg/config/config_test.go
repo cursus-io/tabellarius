@@ -2,9 +2,11 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/cursus-io/tabellarius/pkg/model"
+	mysqldriver "github.com/go-sql-driver/mysql"
 )
 
 func TestLoadConfig(t *testing.T) {
@@ -31,18 +33,21 @@ cdc_server:
   server_id: 9106001
   offset_file: offset.txt
   publisher_config: /config.yaml
+  require_gtid: true
 `
 
 	tmp, err := os.CreateTemp("", "config-*.yaml")
 	if err != nil {
 		t.Fatalf("failed to create temp file: %v", err)
 	}
-	defer os.Remove(tmp.Name())
+	t.Cleanup(func() { _ = os.Remove(tmp.Name()) })
 
 	if _, err := tmp.WriteString(yaml); err != nil {
 		t.Fatalf("failed to write temp file: %v", err)
 	}
-	tmp.Close()
+	if err := tmp.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	cfg, err := Load(tmp.Name())
 	if err != nil {
@@ -66,6 +71,9 @@ cdc_server:
 
 	if cfg.CDCServer.OffsetFile != "offset.txt" {
 		t.Fatalf("unexpected offset file: %s", cfg.CDCServer.OffsetFile)
+	}
+	if !cfg.CDCServer.RequireGTID {
+		t.Fatal("expected require_gtid to be loaded")
 	}
 }
 
@@ -97,11 +105,22 @@ func TestDSN_MySQL(t *testing.T) {
 		},
 	}
 
-	dsn := cfg.DSN()
-	expected := "user:pass@tcp(localhost:3306)/mydb?parseTime=true&tls=skip-verify"
-
-	if dsn != expected {
-		t.Fatalf("unexpected dsn:\nexpected=%s\ngot=%s", expected, dsn)
+	connection, err := cfg.DatabaseConnection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := mysqldriver.ParseDSN(connection.DSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.User != "user" || parsed.Passwd != "pass" || parsed.Addr != "localhost:3306" || parsed.DBName != "mydb" || !parsed.ParseTime {
+		t.Fatalf("unexpected parsed DSN: %+v", parsed)
+	}
+	if !strings.HasPrefix(parsed.TLSConfig, "tabellarius-") {
+		t.Fatalf("unexpected TLS config name %q", parsed.TLSConfig)
+	}
+	if connection.TLSConfig == nil || !connection.TLSConfig.InsecureSkipVerify {
+		t.Fatal("default required mode must encrypt without requiring a managed CA")
 	}
 }
 
@@ -117,7 +136,11 @@ func TestDSN_Postgres(t *testing.T) {
 		},
 	}
 
-	dsn := cfg.DSN()
+	connection, err := cfg.DatabaseConnection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dsn := connection.DSN
 	expected := "postgres://user:pass@localhost:5432/mydb"
 
 	if dsn != expected {
@@ -125,18 +148,31 @@ func TestDSN_Postgres(t *testing.T) {
 	}
 }
 
-func TestDSN_UnsupportedType_Panic(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatal("expected panic, but did not panic")
-		}
-	}()
-
+func TestDatabaseConnectionRejectsUnsupportedType(t *testing.T) {
 	cfg := &Config{
 		Database: Database{
 			Type: "oracle",
 		},
 	}
 
-	_ = cfg.DSN()
+	if _, err := cfg.DatabaseConnection(); err == nil {
+		t.Fatal("expected unsupported database error")
+	}
+}
+
+func TestDatabaseConnectionRequiresCAForVerifiedTLS(t *testing.T) {
+	cfg := &Config{Database: Database{
+		Type:    model.MySQL,
+		Host:    "mysql.example",
+		Port:    3306,
+		TLSMode: "verify_identity",
+	}}
+	if _, err := cfg.DatabaseConnection(); err == nil || !strings.Contains(err.Error(), "tls_ca_file") {
+		t.Fatalf("DatabaseConnection() error = %v", err)
+	}
+
+	cfg.Database.TLSMode = "invalid"
+	if _, err := cfg.DatabaseConnection(); err == nil || !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("DatabaseConnection() error = %v", err)
+	}
 }

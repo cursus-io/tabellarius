@@ -8,8 +8,10 @@ type Offset interface {
 }
 
 type MySQLOffset struct {
-	File string `json:"file"`
-	Pos  uint32 `json:"pos"`
+	File    string `json:"file"`
+	Pos     uint32 `json:"pos"`
+	GTID    string `json:"gtid,omitempty"`
+	GTIDSet string `json:"gtid_set,omitempty"`
 }
 
 func (o MySQLOffset) Compare(other Offset) int {
@@ -36,5 +38,8 @@ func (o MySQLOffset) Compare(other Offset) int {
 }
 
 func (o MySQLOffset) String() string {
+	if o.GTID != "" {
+		return "mysql-gtid:" + o.GTID
+	}
 	return o.File + ":" + fmt.Sprint(o.Pos)
 }

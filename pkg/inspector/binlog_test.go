@@ -1,12 +1,17 @@
 package inspector
 
 import (
+	"context"
 	"crypto/tls"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/cursus-io/tabellarius/pkg/config"
 	"github.com/cursus-io/tabellarius/pkg/model"
+	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
+	"github.com/google/uuid"
 )
 
 func TestParseDSN(t *testing.T) {
@@ -22,6 +27,16 @@ func TestParseDSN(t *testing.T) {
 	}
 	if b.host != "localhost" || b.port != 3307 {
 		t.Fatalf("host parse failed: %s:%d", b.host, b.port)
+	}
+}
+
+func TestParseDSNPreservesEscapedCredentials(t *testing.T) {
+	b := &BinlogInspector{dsn: "user:p:a%40ss@tcp([::1]:3307)/mydb?parseTime=true"}
+	if err := b.parseDSN(); err != nil {
+		t.Fatalf("parseDSN failed: %v", err)
+	}
+	if b.user != "user" || b.password != "p:a%40ss" || b.host != "::1" || b.port != 3307 {
+		t.Fatalf("unexpected parsed connection: user=%q password=%q host=%q port=%d", b.user, b.password, b.host, b.port)
 	}
 }
 
@@ -43,7 +58,7 @@ func TestEmitRowEvents_Write(t *testing.T) {
 		currentTxID: "tx-1",
 		tableMeta: map[string]*tableMeta{
 			"test.users": {
-				columns: []string{"id", "name"},
+				pkName: "id", pkIndex: 0, columns: []string{"id", "name"},
 			},
 		},
 	}
@@ -96,7 +111,7 @@ func TestEmitRowEvents_UpdateInvalid(t *testing.T) {
 		currentTxID: "tx-1",
 		tableMeta: map[string]*tableMeta{
 			"test.users": {
-				columns: []string{"id", "name"},
+				pkName: "id", pkIndex: 0, columns: []string{"id", "name"},
 			},
 		},
 	}
@@ -121,6 +136,153 @@ func TestEmitRowEvents_UpdateInvalid(t *testing.T) {
 
 	if _, ok := <-out; ok {
 		t.Fatalf("expected no events for invalid update")
+	}
+}
+
+func TestGTIDStartsTransactionAndXIDCommitsIt(t *testing.T) {
+	out := make(chan model.Event, 1)
+	b := &BinlogInspector{dbType: model.MySQL, currentFile: "mysql-bin.000011"}
+	id := uuid.MustParse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+
+	err := b.handleEvent(context.Background(), out, &replication.BinlogEvent{
+		Header: &replication.EventHeader{EventType: replication.GTID_EVENT, LogPos: 100},
+		Event:  &replication.GTIDEvent{SID: id[:], GNO: 42},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case event := <-out:
+		t.Fatalf("GTID event committed the transaction early: %T", event)
+	default:
+	}
+
+	set, err := mysql.ParseGTIDSet("mysql", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee:1-42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = b.handleEvent(context.Background(), out, &replication.BinlogEvent{
+		Header: &replication.EventHeader{LogPos: 200},
+		Event:  &replication.XIDEvent{XID: 7, GSet: set},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	boundary, ok := (<-out).(*model.TransactionBoundaryEvent)
+	if !ok {
+		t.Fatal("expected transaction boundary")
+	}
+	if boundary.TxID() != "gtid:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee:42" {
+		t.Fatalf("TxID() = %q", boundary.TxID())
+	}
+	offset := boundary.Offset().(model.MySQLOffset)
+	if offset.GTIDSet != set.String() || offset.Pos != 200 {
+		t.Fatalf("offset = %+v", offset)
+	}
+}
+
+func TestSavepointDoesNotCommitTransaction(t *testing.T) {
+	out := make(chan model.Event, 1)
+	b := &BinlogInspector{dbType: model.MySQL, currentTxID: "gtid:tx-1"}
+	err := b.handleEvent(context.Background(), out, &replication.BinlogEvent{
+		Header: &replication.EventHeader{EventType: replication.QUERY_EVENT, LogPos: 150},
+		Event:  &replication.QueryEvent{Schema: []byte("commerce"), Query: []byte("SAVEPOINT before_update")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case event := <-out:
+		t.Fatalf("SAVEPOINT committed the transaction early: %T", event)
+	default:
+	}
+	if b.currentTxID != "gtid:tx-1" {
+		t.Fatalf("transaction identity changed to %q", b.currentTxID)
+	}
+}
+
+func TestAnonymousGTIDUsesFilePositionIdentityWhenOptional(t *testing.T) {
+	b := &BinlogInspector{dbType: model.MySQL}
+	err := b.handleEvent(context.Background(), make(chan model.Event, 1), &replication.BinlogEvent{
+		Header: &replication.EventHeader{EventType: replication.ANONYMOUS_GTID_EVENT, LogPos: 123},
+		Event:  &replication.GTIDEvent{SID: make([]byte, 16)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.currentGTID != "" || b.currentTxID != "anonymous:123" {
+		t.Fatalf("anonymous event state = gtid %q tx %q", b.currentGTID, b.currentTxID)
+	}
+}
+
+func TestAnonymousGTIDFailsClosedWhenRequired(t *testing.T) {
+	b := &BinlogInspector{
+		dbType:  model.MySQL,
+		options: BinlogInspectorOptions{RequireGTID: true},
+	}
+	err := b.handleEvent(context.Background(), make(chan model.Event, 1), &replication.BinlogEvent{
+		Header: &replication.EventHeader{EventType: replication.ANONYMOUS_GTID_EVENT, LogPos: 123},
+		Event:  &replication.GTIDEvent{SID: make([]byte, 16)},
+	})
+	if err == nil {
+		t.Fatal("expected anonymous GTID to fail closed")
+	}
+}
+
+func TestZeroGTIDFailsClosedWhenRequired(t *testing.T) {
+	b := &BinlogInspector{
+		dbType:  model.MySQL,
+		options: BinlogInspectorOptions{RequireGTID: true},
+	}
+	err := b.handleEvent(context.Background(), make(chan model.Event, 1), &replication.BinlogEvent{
+		Header: &replication.EventHeader{EventType: replication.GTID_EVENT, LogPos: 123},
+		Event:  &replication.GTIDEvent{SID: make([]byte, 16), GNO: 0},
+	})
+	if err == nil {
+		t.Fatal("expected zero GTID to fail closed")
+	}
+}
+
+func TestOnTableMapRejectsMissingConfiguredPrimaryKey(t *testing.T) {
+	b := &BinlogInspector{tableMeta: map[string]*tableMeta{
+		"commerce.markets": {pkName: "id", pkIndex: -1},
+	}}
+	err := b.onTableMap(&replication.TableMapEvent{
+		Schema:     []byte("commerce"),
+		Table:      []byte("markets"),
+		ColumnName: [][]byte{[]byte("name"), []byte("status")},
+	})
+	if err == nil {
+		t.Fatal("expected missing configured primary key to fail closed")
+	}
+}
+
+func TestNewBinlogInspectorRejectsMalformedCheckpoint(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "offset.binlog")
+	if err := os.WriteFile(path, []byte("not-json"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := NewBinlogInspector(nil, model.MySQL, "commerce", "user:pass@tcp(localhost:3306)/commerce", path, 1, nil)
+	if err == nil {
+		t.Fatal("expected malformed checkpoint error")
+	}
+}
+
+func TestNewBinlogInspectorRequiresConfiguredCheckpoint(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing.binlog")
+	_, err := NewBinlogInspectorWithOptions(
+		nil,
+		model.MySQL,
+		"commerce",
+		"user:pass@tcp(localhost:3306)/commerce",
+		path,
+		1,
+		nil,
+		BinlogInspectorOptions{RequireExistingCheckpoint: true},
+	)
+	if err == nil {
+		t.Fatal("expected missing required checkpoint error")
 	}
 }
 func TestEmitRowEvents_AllowListControlsPublishing(t *testing.T) {
@@ -200,7 +362,7 @@ func TestNewBinlogInspector_RegistersOnlyConfiguredTables(t *testing.T) {
 		"user:pass@tcp(localhost:3306)/commerce",
 		"",
 		1,
-		[]config.Table{{Name: "categories", PK: "id"}},
+		[]config.Table{{Name: "categories", PK: "id", IncludeColumns: []string{"id", "name"}}},
 	)
 	if err != nil {
 		t.Fatalf("NewBinlogInspector() error = %v", err)
@@ -217,6 +379,43 @@ func TestNewBinlogInspector_RegistersOnlyConfiguredTables(t *testing.T) {
 	}
 	if _, ok := b.tableMeta["commerce.tabellarius_cdc_log"]; ok {
 		t.Fatal("tabellarius_cdc_log must not be registered for capture")
+	}
+}
+
+func TestNewBinlogInspectorRequiresColumnAllowList(t *testing.T) {
+	_, err := NewBinlogInspector(
+		nil,
+		model.MySQL,
+		"commerce",
+		"user:pass@tcp(localhost:3306)/commerce",
+		"",
+		1,
+		[]config.Table{{Name: "categories", PK: "id"}},
+	)
+	if err == nil {
+		t.Fatal("expected missing include_columns to fail closed")
+	}
+}
+
+func TestEmitRowEventsRejectsMissingPrimaryKeyInRowImage(t *testing.T) {
+	b := &BinlogInspector{
+		currentTxID: "tx-1",
+		tableMeta: map[string]*tableMeta{
+			"commerce.categories": {pkName: "id", pkIndex: 1, columns: []string{"name", "id"}},
+		},
+	}
+	event := &replication.RowsEvent{
+		Table: &replication.TableMapEvent{Schema: []byte("commerce"), Table: []byte("categories")},
+		Rows:  [][]interface{}{{"missing-id"}},
+	}
+	err := b.emitRowEventsContext(
+		context.Background(),
+		make(chan model.Event, 1),
+		&replication.EventHeader{EventType: replication.WRITE_ROWS_EVENTv2, LogPos: 123},
+		event,
+	)
+	if err == nil {
+		t.Fatal("expected missing primary key in row image to fail closed")
 	}
 }
 

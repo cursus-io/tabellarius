@@ -10,8 +10,8 @@ jobs:
   lint:  
     runs-on: ubuntu-latest  
     steps:  
-      - uses: actions/checkout@v4  
-      - uses: actions/setup-go@v5  
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:  
           go-version: '1.25.0'  
           cache: true 
@@ -21,18 +21,20 @@ jobs:
   test:  
     runs-on: ubuntu-latest  
     steps:  
-      - uses: actions/checkout@v4  
-      - uses: actions/setup-go@v5  
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:  
           go-version: '1.25.0'  
           cache: true  
+      - name: Run unit tests with race detection
+        run: go test -race ./...
   
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: '1.25.0'
           cache: true
@@ -42,8 +44,8 @@ jobs:
   build:  
     runs-on: ubuntu-latest  
     steps:  
-      - uses: actions/checkout@v4  
-      - uses: actions/setup-go@v5  
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:  
           go-version: '1.25.0'  
           cache: true  
