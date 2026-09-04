@@ -204,6 +204,7 @@ func (b *BinlogInspector) Start(ctx context.Context, out chan<- model.Event) err
 }
 
 func (b *BinlogInspector) handleEvent(ctx context.Context, out chan<- model.Event, ev *replication.BinlogEvent) error {
+	b.options.Status.BinlogEventReceived(uint64(ev.Header.EventSize))
 	eventTime := time.Unix(int64(ev.Header.Timestamp), 0)
 	src := model.SourceType(b.dbType)
 
@@ -391,7 +392,10 @@ func (b *BinlogInspector) emitRowEvents(out chan<- model.Event, h *replication.E
 }
 
 func (b *BinlogInspector) emitRowEventsContext(ctx context.Context, out chan<- model.Event, h *replication.EventHeader, e *replication.RowsEvent) error {
+	rowImages := uint64(len(e.Rows))
+	b.options.Status.RowImagesReceived(rowImages)
 	if isSystemSchema(e.Table.Schema) {
+		b.options.Status.RowImagesFiltered(rowImages)
 		return nil
 	}
 
@@ -403,6 +407,7 @@ func (b *BinlogInspector) emitRowEventsContext(ctx context.Context, out chan<- m
 	eventTime := time.Unix(int64(h.Timestamp), 0)
 	meta, ok := b.tableMeta[table]
 	if !ok {
+		b.options.Status.RowImagesFiltered(rowImages)
 		return nil
 	}
 	if meta.pkIndex < 0 || meta.pkIndex >= len(meta.columns) {
@@ -423,6 +428,7 @@ func (b *BinlogInspector) emitRowEventsContext(ctx context.Context, out chan<- m
 	case replication.UPDATE_ROWS_EVENTv2:
 		op = model.OpUpdate
 	default:
+		b.options.Status.RowImagesFiltered(rowImages)
 		return nil
 	}
 
@@ -461,8 +467,10 @@ func (b *BinlogInspector) emitRowEventsContext(ctx context.Context, out chan<- m
 	}
 
 	if len(rowsData) == 0 {
+		b.options.Status.RowImagesFiltered(rowImages)
 		return nil
 	}
+	b.options.Status.RowImagesCaptured(rowImages)
 	return sendEvent(ctx, out, model.NewBinlogRowEvent(
 		src,
 		offset,

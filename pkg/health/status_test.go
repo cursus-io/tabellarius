@@ -36,6 +36,10 @@ func TestReadyTracksStreamLifecycle(t *testing.T) {
 func TestMetricsContainNoEventData(t *testing.T) {
 	status := NewStatus()
 	status.StreamStarted()
+	status.BinlogEventReceived(512)
+	status.RowImagesReceived(5)
+	status.RowImagesCaptured(2)
+	status.RowImagesFiltered(3)
 	status.EventProcessed(time.Now().Add(-2 * time.Second))
 	status.CheckpointSaved()
 	status.PublishFailed()
@@ -45,6 +49,11 @@ func TestMetricsContainNoEventData(t *testing.T) {
 	body := recorder.Body.String()
 	for _, metric := range []string{
 		"tabellarius_stream_ready 1",
+		"tabellarius_binlog_events_received_total 1",
+		"tabellarius_binlog_bytes_received_total 512",
+		"tabellarius_row_images_received_total 5",
+		"tabellarius_row_images_captured_total 2",
+		"tabellarius_row_images_filtered_total 3",
 		"tabellarius_processed_events_total 1",
 		"tabellarius_publish_failures_total 1",
 		"tabellarius_last_checkpoint_timestamp_seconds",

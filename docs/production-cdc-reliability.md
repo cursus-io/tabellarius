@@ -64,8 +64,11 @@ configured health address:
 - `/readyz` succeeds only after the binlog stream has started and while no
   terminal failure is recorded.
 - `/metrics` exposes stream readiness, last checkpoint time, source-event lag,
-  processed-event count, publish failures, checkpoint failures, and stream
-  failures. It never exports database credentials, DSNs, row data, or SQL.
+  processed-event count, received binlog events and bytes, received, captured,
+  and filtered row-image counts, publish failures, checkpoint failures, and
+  stream failures. Row-image counters measure decoded images, so an UPDATE
+  normally contributes two images (before and after). Metrics never export
+  table names, database credentials, DSNs, row data, or SQL.
 
 The Deployment must configure startup, readiness, and liveness probes and allow
 only the cluster monitoring path to the metrics port.

@@ -3,11 +3,15 @@ package inspector
 import (
 	"context"
 	"crypto/tls"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/cursus-io/tabellarius/pkg/config"
+	"github.com/cursus-io/tabellarius/pkg/health"
 	"github.com/cursus-io/tabellarius/pkg/model"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
@@ -354,6 +358,54 @@ func TestEmitRowEvents_AllowListControlsPublishing(t *testing.T) {
 		})
 	}
 }
+
+func TestBinlogMetricsTrackCapturedAndFilteredRowImages(t *testing.T) {
+	status := health.NewStatus()
+	b := &BinlogInspector{
+		dbType:  model.MySQL,
+		options: BinlogInspectorOptions{Status: status},
+		tableMeta: map[string]*tableMeta{
+			"commerce.categories": {pkName: "id", pkIndex: 0, columns: []string{"id", "name"}},
+		},
+	}
+	out := make(chan model.Event, 1)
+
+	for _, event := range []*replication.BinlogEvent{
+		{
+			Header: &replication.EventHeader{EventType: replication.WRITE_ROWS_EVENTv2, EventSize: 100, LogPos: 100},
+			Event: &replication.RowsEvent{
+				Table: &replication.TableMapEvent{Schema: []byte("commerce"), Table: []byte("categories")},
+				Rows:  [][]interface{}{{1, "captured"}},
+			},
+		},
+		{
+			Header: &replication.EventHeader{EventType: replication.UPDATE_ROWS_EVENTv2, EventSize: 200, LogPos: 200},
+			Event: &replication.RowsEvent{
+				Table: &replication.TableMapEvent{Schema: []byte("commerce"), Table: []byte("search_query_logs")},
+				Rows:  [][]interface{}{{1, "before"}, {1, "after"}},
+			},
+		},
+	} {
+		if err := b.handleEvent(context.Background(), out, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	recorder := httptest.NewRecorder()
+	status.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	for _, metric := range []string{
+		"tabellarius_binlog_events_received_total 2",
+		"tabellarius_binlog_bytes_received_total 300",
+		"tabellarius_row_images_received_total 3",
+		"tabellarius_row_images_captured_total 1",
+		"tabellarius_row_images_filtered_total 2",
+	} {
+		if !strings.Contains(recorder.Body.String(), metric) {
+			t.Fatalf("metrics missing %q: %s", metric, recorder.Body.String())
+		}
+	}
+}
+
 func TestNewBinlogInspector_RegistersOnlyConfiguredTables(t *testing.T) {
 	b, err := NewBinlogInspector(
 		nil,
