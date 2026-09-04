@@ -19,7 +19,8 @@ FROM alpine:3.23
 
 WORKDIR /app
 
-RUN apk add --no-cache ca-certificates \
+RUN apk upgrade --no-cache \
+	&& apk add --no-cache ca-certificates \
 	&& addgroup -S -g 65532 tabellarius \
 	&& adduser -S -D -H -u 65532 -G tabellarius tabellarius
 
