@@ -218,21 +218,19 @@ func (b *BinlogInspector) handleEvent(ctx context.Context, out chan<- model.Even
 			b.currentTxID = fmt.Sprintf("anonymous:%d", ev.Header.LogPos)
 			return nil
 		}
-		id, err := uuid.FromBytes(e.SID)
-		if err != nil {
-			return fmt.Errorf("decode GTID SID: %w", err)
-		}
-		if id == uuid.Nil || e.GNO <= 0 {
+		return b.beginGTID(e.SID, "", e.GNO, ev.Header.LogPos)
+
+	case *replication.GtidTaggedLogEvent:
+		tag := e.Tag.String()
+		if tag == "" {
 			if b.options.RequireGTID {
-				return errors.New("invalid zero GTID received while require_gtid is enabled")
+				return errors.New("tagged GTID event has an empty tag while require_gtid is enabled")
 			}
 			b.currentGTID = ""
 			b.currentTxID = fmt.Sprintf("anonymous:%d", ev.Header.LogPos)
 			return nil
 		}
-		b.currentGTID = fmt.Sprintf("%s:%d", id.String(), e.GNO)
-		b.currentTxID = "gtid:" + b.currentGTID
-		return nil
+		return b.beginGTID(e.SID, tag, e.GNO, ev.Header.LogPos)
 
 	case *replication.TableMapEvent:
 		return b.onTableMap(e)
@@ -292,6 +290,28 @@ func (b *BinlogInspector) handleEvent(ctx context.Context, out chan<- model.Even
 		return b.emitBoundary(ctx, out, ev.Header.LogPos, eventTime, model.TxCommit, e.GSet)
 	}
 
+	return nil
+}
+
+func (b *BinlogInspector) beginGTID(sid []byte, tag string, gno int64, pos uint32) error {
+	id, err := uuid.FromBytes(sid)
+	if err != nil {
+		return fmt.Errorf("decode GTID SID: %w", err)
+	}
+	if id == uuid.Nil || gno <= 0 {
+		if b.options.RequireGTID {
+			return errors.New("invalid zero GTID received while require_gtid is enabled")
+		}
+		b.currentGTID = ""
+		b.currentTxID = fmt.Sprintf("anonymous:%d", pos)
+		return nil
+	}
+	if tag == "" {
+		b.currentGTID = fmt.Sprintf("%s:%d", id.String(), gno)
+	} else {
+		b.currentGTID = fmt.Sprintf("%s:%s:%d", id.String(), tag, gno)
+	}
+	b.currentTxID = "gtid:" + b.currentGTID
 	return nil
 }
 

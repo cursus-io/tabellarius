@@ -186,6 +186,80 @@ func TestGTIDStartsTransactionAndXIDCommitsIt(t *testing.T) {
 	}
 }
 
+func TestTaggedGTIDSetRoundTrips(t *testing.T) {
+	const taggedSet = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee:1-41:mysqlsh:1-7"
+
+	set, err := mysql.ParseGTIDSet(mysql.MySQLFlavor, taggedSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := set.String(); got != taggedSet {
+		t.Fatalf("tagged GTID set = %q, want %q", got, taggedSet)
+	}
+}
+
+func TestTaggedGTIDStartsTransactionAndXIDCommitsIt(t *testing.T) {
+	out := make(chan model.Event, 1)
+	b := &BinlogInspector{dbType: model.MySQL, currentFile: "mysql-bin.000011"}
+	id := uuid.MustParse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+
+	err := b.handleEvent(context.Background(), out, &replication.BinlogEvent{
+		Header: &replication.EventHeader{EventType: replication.GTID_TAGGED_LOG_EVENT, LogPos: 100},
+		Event: &replication.GtidTaggedLogEvent{GTIDEvent: replication.GTIDEvent{
+			SID: id[:], Tag: mysql.NewTag("mysqlsh"), GNO: 7,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case event := <-out:
+		t.Fatalf("tagged GTID event committed the transaction early: %T", event)
+	default:
+	}
+
+	set, err := mysql.ParseGTIDSet(mysql.MySQLFlavor, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee:mysqlsh:1-7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = b.handleEvent(context.Background(), out, &replication.BinlogEvent{
+		Header: &replication.EventHeader{LogPos: 200},
+		Event:  &replication.XIDEvent{XID: 7, GSet: set},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	boundary, ok := (<-out).(*model.TransactionBoundaryEvent)
+	if !ok {
+		t.Fatal("expected transaction boundary")
+	}
+	if got, want := boundary.TxID(), "gtid:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee:mysqlsh:7"; got != want {
+		t.Fatalf("TxID() = %q, want %q", got, want)
+	}
+	offset := boundary.Offset().(model.MySQLOffset)
+	if offset.GTID != "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee:mysqlsh:7" || offset.GTIDSet != set.String() || offset.Pos != 200 {
+		t.Fatalf("offset = %+v", offset)
+	}
+}
+
+func TestTaggedGTIDWithEmptyTagFailsClosedWhenRequired(t *testing.T) {
+	b := &BinlogInspector{
+		dbType:  model.MySQL,
+		options: BinlogInspectorOptions{RequireGTID: true},
+	}
+	id := uuid.MustParse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+	err := b.handleEvent(context.Background(), make(chan model.Event, 1), &replication.BinlogEvent{
+		Header: &replication.EventHeader{EventType: replication.GTID_TAGGED_LOG_EVENT, LogPos: 123},
+		Event: &replication.GtidTaggedLogEvent{GTIDEvent: replication.GTIDEvent{
+			SID: id[:], GNO: 7,
+		}},
+	})
+	if err == nil {
+		t.Fatal("expected empty tagged GTID to fail closed")
+	}
+}
+
 func TestSavepointDoesNotCommitTransaction(t *testing.T) {
 	out := make(chan model.Event, 1)
 	b := &BinlogInspector{dbType: model.MySQL, currentTxID: "gtid:tx-1"}
