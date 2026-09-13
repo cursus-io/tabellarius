@@ -9,6 +9,7 @@ import (
 
 	"github.com/cursus-io/tabellarius/pkg/model"
 	"github.com/cursus-io/tabellarius/pkg/util"
+	"github.com/go-mysql-org/go-mysql/mysql"
 )
 
 type fakeInspector struct {
@@ -126,6 +127,39 @@ func TestRunSavesCheckpointOnlyAfterPublishSucceeds(t *testing.T) {
 	}
 	if checkpoint != offset {
 		t.Fatalf("checkpoint = %+v, want %+v", checkpoint, offset)
+	}
+}
+
+func TestRunSavesTaggedGTIDCheckpoint(t *testing.T) {
+	offset := model.MySQLOffset{
+		File:    "mysql-bin.000011",
+		Pos:     797583889,
+		GTID:    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee:mysqlsh:7",
+		GTIDSet: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee:1-42:mysqlsh:1-7",
+	}
+	path := filepath.Join(t.TempDir(), "commerce.binlog")
+	source := &TabellariusSource{
+		ins:            &fakeInspector{events: transactionEvents(offset)},
+		pub:            &fakeEventPublisher{},
+		checkpointPath: path,
+	}
+
+	if err := source.Run(context.Background()); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	checkpoint, found, err := util.LoadJSONStrict[model.MySQLOffset](path)
+	if err != nil || !found {
+		t.Fatalf("checkpoint found=%v err=%v", found, err)
+	}
+	if checkpoint != offset {
+		t.Fatalf("checkpoint = %+v, want %+v", checkpoint, offset)
+	}
+	set, err := mysql.ParseGTIDSet(mysql.MySQLFlavor, checkpoint.GTIDSet)
+	if err != nil {
+		t.Fatalf("parse persisted tagged GTID set: %v", err)
+	}
+	if got := set.String(); got != offset.GTIDSet {
+		t.Fatalf("persisted tagged GTID set = %q, want %q", got, offset.GTIDSet)
 	}
 }
 
