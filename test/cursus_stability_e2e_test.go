@@ -77,6 +77,9 @@ func restartAndAssertPublish(t *testing.T, service, scenario string) {
 	id := time.Now().UnixNano()
 	runCompose(t, "exec", "-T", "mysql", "mysql", "-uroot", "-proot", "mydb", "-e",
 		fmt.Sprintf("INSERT INTO users (email, name) VALUES ('stability-%d@example.com', 'stability-%d')", id, id))
+	if service == "broker" {
+		recoverUnknownBrokerRestartDelivery(t, since)
+	}
 
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
@@ -89,6 +92,25 @@ func restartAndAssertPublish(t *testing.T, service, scenario string) {
 
 	logs := composeOutput(t, "logs", "--since", since.Format(time.RFC3339Nano), "cdc-server")
 	t.Fatalf("%s: new MySQL transaction was not published after restart: %s", scenario, safeCDCStartupDiagnostics(logs))
+}
+
+func recoverUnknownBrokerRestartDelivery(t *testing.T, since time.Time) {
+	t.Helper()
+
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		logs := composeOutput(t, "logs", "--since", since.Format(time.RFC3339Nano), "cdc-server")
+		if strings.Contains(logs, "[publish]") {
+			return
+		}
+		if strings.Contains(logs, "producer delivery outcome unknown") {
+			restartSince := time.Now().UTC()
+			runCompose(t, "restart", "cdc-server")
+			waitForServiceLog(t, "cdc-server", restartSince, "[binlog] stream started")
+			return
+		}
+		time.Sleep(2 * time.Second)
+	}
 }
 
 func waitForServiceLog(t *testing.T, service string, since time.Time, expected string) {
