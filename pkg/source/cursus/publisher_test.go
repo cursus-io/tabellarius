@@ -207,3 +207,22 @@ func TestPublisherReturnsNonRetryableBrokerError(t *testing.T) {
 		t.Fatalf("Flush() calls = %d, want 1", fake.flushCalls)
 	}
 }
+
+func TestPublisherDoesNotRetryUnknownDeliveryOutcome(t *testing.T) {
+	want := &sdk.ProducerOutcomeUnknownError{
+		Partition: 0,
+		Stage:     "acknowledgement read",
+		Cause:     context.DeadlineExceeded,
+	}
+	fake := &fakePublisher{flushErrors: []error{want}}
+	publisher := &Publisher{pub: fake}
+	event := model.NewTransactionBoundaryEvent(model.SourceMySQLBinlog, model.MySQLOffset{}, time.Now(), "tx-1", model.TxCommit)
+
+	err := publisher.PublishContext(context.Background(), event)
+	if !errors.Is(err, sdk.ErrProducerOutcomeUnknown) {
+		t.Fatalf("Publish() error = %v, want unknown delivery outcome", err)
+	}
+	if fake.flushCalls != 1 {
+		t.Fatalf("Flush() calls = %d, want 1", fake.flushCalls)
+	}
+}
