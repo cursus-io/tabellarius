@@ -2,10 +2,12 @@ version: "3.9"
 
 services:
   broker:
-    image: ghcr.io/cursus-io/cursus@sha256:8da30e5c047d879173341ac5531df7cf71591f65445132ffb920efb19b5f49bf
+    image: ghcr.io/cursus-io/cursus@sha256:3c10951cce9c0e5fd4c0ab690b143311fae9c44921b189576ace72791c90a725
     container_name: tabellarius-cursus
     command: ["./broker"]
     environment:
+      BROKER_BIND_ADDRESS: 0.0.0.0
+      ALLOW_INSECURE_CLIENT_TRANSPORT: "true"
       ADVERTISED_CLIENT_HOST: broker
     ports:
       - "9000:9000"

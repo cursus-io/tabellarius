@@ -168,6 +168,9 @@ func isRetryableDeliveryWait(err error) bool {
 	if err == nil {
 		return false
 	}
+	if errors.Is(err, sdk.ErrProducerOutcomeUnknown) {
+		return false
+	}
 	var brokerErr *sdk.BrokerError
 	if errors.As(err, &brokerErr) {
 		return brokerErr.Retryable
